@@ -10,18 +10,21 @@ import Foundation
 import SQLite
 
 struct RelationshipColumns {
-    static let LeftID = Expression<Int64>("left_id")
-    static let RightID = Expression<Int64>("right_id")
+    static let LeftID = Expression<SQLiteModelID>("left_id")
+    static let RightID = Expression<SQLiteModelID>("right_id")
 }
 
 internal protocol RelationshipModel : SQLiteModel {
     
-    typealias LeftModel: SQLiteModel
-    typealias RightModel: SQLiteModel
+    associatedtype LeftModel: SQLiteModel
+    associatedtype RightModel: SQLiteModel
     
     static func initialize() -> Void
-    static func removeLeft(leftID: Int64) -> Void
-    static func removeRight(rightID: Int64) -> Void
+    static func removeLeft(leftID: SQLiteModelID) -> Void
+    static func removeRight(rightID: SQLiteModelID) -> Void
+    static func removeMultipleRight(rightIDs: [SQLiteModelID]) -> Void
+    
+    static var unique: Bool {get}
 }
 
 extension RelationshipModel {
@@ -33,13 +36,22 @@ extension RelationshipModel {
         return "\(leftName)_rel_map_\(rightName)_\(addition)"
     }
     
-    final static func removeLeft(leftID: Int64) -> Void {
-        let query = self.table.filter(self.localIDExpression == leftID)
+    static var unique: Bool {
+        return false
+    }
+    
+    final static func removeLeft(leftID: SQLiteModelID) -> Void {
+        let query = self.table.filter(RelationshipColumns.LeftID == leftID)
         let _ = try? self.delete(query)
     }
     
-    static func removeRight(rightID: Int64) -> Void {
-        let query = self.table.filter(self.localIDExpression == rightID)
+    static func removeRight(rightID: SQLiteModelID) -> Void {
+        let query = self.table.filter(RelationshipColumns.RightID == rightID)
+        let _ = try? self.delete(query)
+    }
+    
+    static func removeMultipleRight(rightIDs: [SQLiteModelID]) -> Void {
+        let query = self.table.filter(rightIDs.contains(RelationshipColumns.RightID))
         let _ = try? self.delete(query)
     }
     
@@ -51,31 +63,40 @@ extension RelationshipModel {
 }
 
 protocol SingularRelationshipModel : RelationshipModel {
-    static func getRelationship(leftID: Int64) -> RightModel?
-    static func setRelationship(left: LeftModel, right: RightModel) -> Int64
+    static func getRelationship(leftID: SQLiteModelID) -> RightModel?
+    static func setRelationship(left: LeftModel, right: RightModel)
 }
 
 extension SingularRelationshipModel {
     
-    static func getRelationship(leftID: Int64) -> RightModel? {
-        if let result = try? self.fetch(self.table.filter(RelationshipColumns.LeftID == leftID)) where result.count == 1 {
-            guard let rightID = result.first?.get(RelationshipColumns.RightID),
-            let instance = try? RightModel.find(rightID)
-            else {
-                return nil
-            }
-            return instance
+    static func getRelationship(leftID: SQLiteModelID) -> RightModel? {
+        
+        guard let rightID = Meta.queryCachedValueForSingularRelationship(self, queryColumn: RelationshipColumns.LeftID, queryValue: leftID, returnColumn: RelationshipColumns.RightID) else {
+            return nil
         }
-        return nil
+        return RightModel(localID: rightID)
     }
     
-    final static func setRelationship(left: LeftModel, right: RightModel) -> Int64 {
-        let _ = try? self.delete(self.table.filter(RelationshipColumns.LeftID == left.localID))
-        let setters = [
-            RelationshipColumns.LeftID <- left.localID,
-            RelationshipColumns.RightID <- right.localID,
-        ]
-        return try! self.new(setters).localID
+    final static func setRelationship(left: LeftModel, right: RightModel) {
+        
+        if Meta.hasLocalInstanceContextForSingularRelationhip(self, leftID: left.localID) {
+            let setters = [
+                RelationshipColumns.RightID <- right.localID,
+            ]
+            let query = self.query.filter(RelationshipColumns.LeftID == left.localID)
+            try! self.update(query, setters: setters)
+        }
+        else {
+            self.removeLeft(left.localID)
+            if self.unique {
+                self.removeRight(right.localID)
+            }
+            let setters = [
+                RelationshipColumns.LeftID <- left.localID,
+                RelationshipColumns.RightID <- right.localID,
+            ]
+            let _ = try! self.new(setters).localID
+        }
     }
     
     static func initialize() -> Void {
@@ -89,7 +110,7 @@ internal struct SingularRelationship<Left : SQLiteModel, Right : SQLiteModel> : 
     typealias LeftModel = Left
     typealias RightModel = Right
     
-    var localID: Int64 = -1
+    var localID: SQLiteModelID = -1
     
     static func buildTable(tableBuilder: TableBuilder) {
         tableBuilder.column(RelationshipColumns.LeftID, unique: true) 
@@ -103,7 +124,11 @@ internal struct UniqueSingularRelationship<Left : SQLiteModel, Right : SQLiteMod
     typealias LeftModel = Left
     typealias RightModel = Right
     
-    var localID: Int64 = -1
+    var localID: SQLiteModelID = -1
+    
+    static var unique: Bool {
+        return true
+    }
     
     static func buildTable(tableBuilder: TableBuilder) {
         tableBuilder.column(RelationshipColumns.LeftID, unique: true)
@@ -113,36 +138,51 @@ internal struct UniqueSingularRelationship<Left : SQLiteModel, Right : SQLiteMod
 }
 
 protocol MultipleRelationshipModel : RelationshipModel {
-    static func getRelationship(leftID: Int64) -> [RightModel]
-    static func setRelationship(left: LeftModel, right: [RightModel]) -> [Int64]
+    static func getRelationship(leftID: SQLiteModelID) -> [RightModel]
+    static func setRelationship(left: LeftModel, right: [RightModel])
 }
 
 extension MultipleRelationshipModel {
     
-    static func getRelationship(leftID: Int64) -> [RightModel] {
-        if let result = try? self.fetch(self.table.filter(RelationshipColumns.LeftID == leftID)) {
-            let rightIDs = result.map({$0.get(RelationshipColumns.RightID)})
+    static func getRelationship(leftID: SQLiteModelID) -> [RightModel] {
+        
+        let rightIDs = Meta.queryCachedValueForRelationship(self, queryColumn: RelationshipColumns.LeftID, queryValue: leftID, returnColumn: RelationshipColumns.RightID)
+        let cachedIDsSplit = Meta.queryCachedInstanceIDsFor(RightModel.self, hashes: rightIDs.sort{ $0 < $1})
+        var instances: [RightModel] = cachedIDsSplit.0.map { RightModel(localID: $0) }
+        if cachedIDsSplit.1.count > 0 {
             let query = RightModel.table.filter(rightIDs.contains(RightModel.localIDExpression))
-            guard let instances = try? RightModel.fetch(query) else {
-                    return []
+            guard let fetchedInstances = try? RightModel.fetch(query) else {
+                return instances
             }
-            return instances
+            instances += fetchedInstances
         }
-        return []
+        return instances
     }
     
-    static func setRelationship(left: LeftModel, right: [RightModel]) -> [Int64] {
-        let _ = try? self.delete(self.table.filter(RelationshipColumns.LeftID == left.localID))
-        var ids = [Int64]()
-        for rightModel in right {
-            let setters = [
-                RelationshipColumns.LeftID <- left.localID,
-                RelationshipColumns.RightID <- rightModel.localID,
-            ]
-            let id = try! self.new(setters).localID
-            ids.append(id)
+    static func setRelationship(left: LeftModel, right: [RightModel]) {
+        self.removeLeft(left.localID)
+        if self.unique {
+            self.removeMultipleRight(right.map({ $0.localID }))
         }
-        return ids
+        guard right.count > 0 else {
+            return
+        }
+        let now = NSDate()
+        let dateString = dateFormatter.stringFromDate(now)
+        var statement = "INSERT INTO \(self.tableName) (left_id, right_id, sqlmdl_localCreatedAt, sqlmdl_localUpdatedAt) VALUES"
+        for rightID in right.map({ $0.localID }) {
+            statement += " (\(left.localID), \(rightID), '\(dateString)', '\(dateString)'),"
+        }
+        statement.removeAtIndex(statement.characters.endIndex.predecessor())
+        statement += ";"
+        
+        let _ = try? self.connect(error: SQLiteModelError.InsertError, connectionBlock: { connection in
+            try connection.execute(statement)
+            let query = self.query.filter(RelationshipColumns.LeftID == left.localID)
+            for row in try connection.prepare(query) {
+                Meta.createLocalInstanceContextFor(self, row: row)
+            }
+        })
     }
     
     static func initialize() -> Void {
@@ -156,7 +196,7 @@ internal struct MultipleRelationship<Left : SQLiteModel, Right : SQLiteModel> : 
     typealias LeftModel = Left
     typealias RightModel = Right
     
-    var localID: Int64 = -1
+    var localID: SQLiteModelID = -1
     
     static func buildTable(tableBuilder: TableBuilder) {
         tableBuilder.column(RelationshipColumns.LeftID)
@@ -175,7 +215,11 @@ internal struct UniqueMultipleRelationship<Left : SQLiteModel, Right : SQLiteMod
     typealias LeftModel = Left
     typealias RightModel = Right
     
-    var localID: Int64 = -1
+    var localID: SQLiteModelID = -1
+    
+    static var unique: Bool {
+        return true
+    }
     
     static func buildTable(tableBuilder: TableBuilder) {
         tableBuilder.column(RelationshipColumns.LeftID)

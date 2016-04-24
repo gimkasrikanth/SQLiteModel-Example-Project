@@ -9,6 +9,8 @@
 import Foundation
 import SQLite
 
+public typealias SQLiteModelID = Int64
+
 public typealias Completion = (SQLiteModelError?) -> Void
 
 public protocol SQLiteModelAbstract {
@@ -25,10 +27,12 @@ public protocol SQLiteConvertible: SQLiteModelAbstract {
     
     func get<V: SQLiteModel>(column: Relationship<V>) -> V
     func get<V: SQLiteModel>(column: Relationship<V?>) -> V?
+    // Ordered by localID Ascending
     func get<V: SQLiteModel>(column: Relationship<[V]>) -> [V]
     
     func getInBackground<V: SQLiteModel>(column: Relationship<V>, completion: (V) -> Void)
     func getInBackground<V: SQLiteModel>(column: Relationship<V?>, completion: (V?) -> Void)
+    // Ordered by localID Ascending
     func getInBackground<V: SQLiteModel>(column: Relationship<[V]>, completion: ([V]) -> Void)
     
     func set<V: Value>(column: Expression<V>, value: V)
@@ -78,8 +82,8 @@ public protocol SQLiteUpdatable {
 }
 
 public protocol SQLiteFetchable {
-    static func find(id: Int64) throws -> Self
-    static func findInBackground(id: Int64, completion: (Self?, SQLiteModelError?) -> Void)
+    static func find(id: SQLiteModelID) throws -> Self
+    static func findInBackground(id: SQLiteModelID, completion: (Self?, SQLiteModelError?) -> Void)
     
     static func fetchAll() throws -> [Self]
     static func fetchAllInBackground(completion: ([Self], SQLiteModelError?) -> Void)
@@ -96,15 +100,26 @@ public protocol SQLiteInstance {
     func delete() throws
     func deleteInBackground(completion: Completion?)
     
-    var localID: Int64 {get set}
+    func countForRelationship<V: SQLiteModel>(column: Relationship<[V]>) -> Int
+    
+    var localID: SQLiteModelID {get set}
     var localCreatedAt: NSDate? {get}
     var localUpdatedAt: NSDate? {get}
 }
 
 public protocol SQLiteQueryable {
     // Returns a base query
-    // Select * from <table_name>
+    /// Select * from <table_name>
     static var query: QueryType {get}
+}
+
+public protocol SQLiteScalarQueryable {
+    static func count() throws -> Int
+    static func countInBackground(completion: (Int, SQLiteModelError?) -> Void)
+}
+
+public protocol SQLiteAtomic {
+    static func transaction(execute: Void -> Void)
 }
 
 public protocol SQLiteModel:
@@ -115,5 +130,7 @@ SQLiteDeletable,
 SQLiteFetchable,
 SQLiteInstance,
 SQLiteQueryable,
+SQLiteScalarQueryable,
+SQLiteAtomic,
 Value
 {}

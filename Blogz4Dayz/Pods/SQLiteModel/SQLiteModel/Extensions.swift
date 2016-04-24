@@ -14,10 +14,10 @@ import SQLite
 extension SQLiteModel {
     
     public static var declaredDatatype: String {
-        return "INTEGER"
+        return SQLiteModelID.declaredDatatype
     }
     
-    public static func fromDatatypeValue(datatypeValue: Int64) -> Self? {
+    public static func fromDatatypeValue(datatypeValue: SQLiteModelID) -> Self? {
         do {
             let query = self.query.filter(self.localIDExpression == datatypeValue).limit(1, offset: 0)
             guard let instance = try self.fetch(query).first else {
@@ -31,8 +31,20 @@ extension SQLiteModel {
         }
     }
     
-    public var datatypeValue: Int64 {
+    public var datatypeValue: SQLiteModelID {
         return self.localID
+    }
+}
+
+extension Float: Value {
+    public static var declaredDatatype: String {
+        return Double.declaredDatatype
+    }
+    public static func fromDatatypeValue(doubleValue: Double) -> Float {
+        return Float(Double.fromDatatypeValue(doubleValue))
+    }
+    public var datatypeValue: Double {
+        return Double(self)
     }
 }
 

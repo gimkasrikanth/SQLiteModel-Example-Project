@@ -21,7 +21,7 @@ public extension SQLiteModel {
         return Meta.tableForModel(self)
     }
     
-    internal static var localIDExpression : Expression<Int64> {
+    internal static var localIDExpression : Expression<SQLiteModelID> {
         return Meta.localIDExpressionForModel(self)
     }
     
@@ -33,7 +33,7 @@ public extension SQLiteModel {
         return Meta.localCreatedAtExpressionForModel(self)
     }
     
-    internal static func instanceQueryWithLocalID(localID: Int64) -> QueryType {
+    internal static func instanceQueryWithLocalID(localID: SQLiteModelID) -> QueryType {
         let instance = self.table.filter(self.localIDExpression == localID)
         return instance
     }
@@ -58,6 +58,8 @@ public extension SQLiteModel {
 // MARK: Method Implementation
 
 public extension SQLiteModel {
+    
+    // MARK: Connections
     
     internal typealias ConnectionBlock = (connection: Connection) throws -> Void
     internal static func sqlmdl_connect(error error: SQLiteModelError, instance: Any? = nil, connectionBlock: ConnectionBlock) throws -> Void {
@@ -84,6 +86,22 @@ public extension SQLiteModel {
         }
     }
     
+    internal static func sqlmdl_connect<V: Value>(error error: SQLiteModelError = .ScalarQueryError, connectionBlock: (connection: Connection) throws -> V?) throws -> V? {
+        do {
+            let connection = try SQLiteDatabaseManager.connection()
+            let result = try connectionBlock(connection: connection)
+            return result
+        }
+        catch let caughtError {
+            error.logError(self, error: caughtError)
+            throw error
+        }
+    }
+    
+    internal func connect(error error: SQLiteModelError, connectionBlock: ConnectionBlock) throws -> Void {
+        try self.dynamicType.sqlmdl_connect(error: error, instance: self, connectionBlock: connectionBlock)
+    }
+    
     internal static func connect(error error: SQLiteModelError, connectionBlock: ConnectionBlock) throws -> Void {
         try self.sqlmdl_connect(error: error, connectionBlock: connectionBlock)
     }
@@ -93,13 +111,12 @@ public extension SQLiteModel {
         return result
     }
     
-    internal func connect(error error: SQLiteModelError, connectionBlock: ConnectionBlock) throws -> Void {
-        try self.dynamicType.sqlmdl_connect(error: error, instance: self, connectionBlock: connectionBlock)
+    internal static func connectForScalarQuery<V: Value>(connectionBlock: (connection: Connection) throws -> V?) throws -> V? {
+        let result = try self.sqlmdl_connect(connectionBlock:connectionBlock)
+        return result
     }
-        
-    static func alterSchema(schemaUpdater: SchemaUpdater) -> Void {
-        // Empty implimentation to make method optional
-    }
+    
+    // MARK: SQLiteTableOperations
     
     final static func createTable() throws -> Void {
         
@@ -168,6 +185,8 @@ public extension SQLiteModel {
         }
     }
     
+    // MARK: SQLiteDeletable
+    
     final static func deleteAll() throws -> Void {
         try self.delete(self.query)
         Meta.removeAllLocalInstanceContextsFor(self)
@@ -197,7 +216,9 @@ public extension SQLiteModel {
         }
     }
     
-    final static func new(setters: [Setter] = [], relationshipSetters: [RelationshipSetter] = []) throws -> Self {
+    // MARK: SQLiteCreatable
+    
+    final static func new(setters: [Setter], relationshipSetters: [RelationshipSetter] = []) throws -> Self {
         let result = try self.connectForFetch(error: SQLiteModelError.InsertError, connectionBlock: { connection in
             let now = NSDate()
             var setters = setters
@@ -218,7 +239,7 @@ public extension SQLiteModel {
         return result.first!
     }
     
-    final static func newInBackground(setters: [Setter] = [], relationshipSetters: [RelationshipSetter] = [], completion: ((Self?, SQLiteModelError?) -> Void)? = nil) {
+    final static func newInBackground(setters: [Setter], relationshipSetters: [RelationshipSetter] = [], completion: ((Self?, SQLiteModelError?) -> Void)? = nil) {
         SyncManager.async(self, execute: {
             let instance = try self.new(setters, relationshipSetters: relationshipSetters)
             if let completion = completion {
@@ -235,7 +256,9 @@ public extension SQLiteModel {
         }
     }
     
-    final static func find(id: Int64) throws -> Self {
+    // MARK: SQLiteFetchable
+    
+    final static func find(id: SQLiteModelID) throws -> Self {
         if Meta.hasLocalInstanceContextFor(self, hash: id) {
             return Self(localID: id)
         }
@@ -257,7 +280,7 @@ public extension SQLiteModel {
         return result[0]
     }
     
-    final static func findInBackground(id: Int64, completion: (Self?, SQLiteModelError?) -> Void) {
+    final static func findInBackground(id: SQLiteModelID, completion: (Self?, SQLiteModelError?) -> Void) {
         SyncManager.async(self, execute: {
             let instance = try self.find(id)
             completion(instance, nil)
@@ -302,6 +325,8 @@ public extension SQLiteModel {
         }
     }
     
+    // MARK: SQLiteUpdatable
+    
     private static func sqlmdl_update(query: QueryType, setters: [Setter], relationshipSetters: [RelationshipSetter]) throws -> Void {
         try self.connect(error: SQLiteModelError.UpdateError, connectionBlock: { connection in
 
@@ -327,7 +352,7 @@ public extension SQLiteModel {
         try self.sqlmdl_update(query, setters: setters, relationshipSetters: relationshipSetters)
     }
     
-    static func updateInBackground(query: QueryType, setters: [Setter] = [], relationshipSetters: [RelationshipSetter] = [], completion: Completion?) {
+    final static func updateInBackground(query: QueryType, setters: [Setter] = [], relationshipSetters: [RelationshipSetter] = [], completion: Completion?) {
         SyncManager.async(self, execute: {
             try self.update(query, setters: setters, relationshipSetters: relationshipSetters)
             SyncManager.main(completion, error: nil)
@@ -340,11 +365,13 @@ public extension SQLiteModel {
         try self.sqlmdl_update(self.query, setters: setters, relationshipSetters: relationshipSetters)
     }
     
-    static func updateAllInBackground(setters: [Setter] = [], relationshipSetters: [RelationshipSetter] = [], completion: Completion? = nil) {
+    final static func updateAllInBackground(setters: [Setter] = [], relationshipSetters: [RelationshipSetter] = [], completion: Completion? = nil) {
         self.updateInBackground(query, setters: setters, relationshipSetters: relationshipSetters, completion: completion)
     }
     
-    init(localID: Int64 = -1) {
+    // MARK: SQLiteInstance
+    
+    init(localID: SQLiteModelID = -1) {
         self.init()
         self.localID = localID
     }
@@ -362,7 +389,7 @@ public extension SQLiteModel {
         })
     }
     
-    mutating func saveInBackground(completion: Completion? = nil) {
+    final mutating func saveInBackground(completion: Completion? = nil) {
         SyncManager.async(self.dynamicType, execute: {
             try self.save()
             SyncManager.main(completion, error: nil)
@@ -378,7 +405,7 @@ public extension SQLiteModel {
         })
     }
     
-    func deleteInBackground(completion: Completion? = nil) {
+    final func deleteInBackground(completion: Completion? = nil) {
         SyncManager.async(self.dynamicType, execute: {
             try self.delete()
             SyncManager.main(completion, error: nil)
@@ -387,7 +414,19 @@ public extension SQLiteModel {
         }
     }
     
-    // Get
+    func countForRelationship<V: SQLiteModel>(column: Relationship<[V]>) -> Int {
+        return Meta.countForRelationshipForInstance(self, relationship: column)
+    }
+    
+    // MARK: SQLiteModelAbstract
+    
+    static func alterSchema(schemaUpdater: SchemaUpdater) -> Void {
+        // Empty implimentation to make method optional
+    }
+    
+    // MARK: SQLiteConvertible
+    
+    // Set
     
     final func get<V: Value>(column: Expression<V>) -> V {
         return self.get(Expression<V?>(column))!
@@ -398,19 +437,19 @@ public extension SQLiteModel {
         return value
     }
     
-    func get<V: SQLiteModel>(column: Relationship<V>) -> V {
+    final func get<V: SQLiteModel>(column: Relationship<V>) -> V {
         return self.get(Relationship<V?>(column))!
     }
     
-    func get<V: SQLiteModel>(column: Relationship<V?>) -> V? {
+    final func get<V: SQLiteModel>(column: Relationship<V?>) -> V? {
         return Meta.getRelationshipForModel(self.dynamicType, hash: self.localID, relationship: column)
     }
     
-    func get<V: SQLiteModel>(column: Relationship<[V]>) -> [V] {
+    final func get<V: SQLiteModel>(column: Relationship<[V]>) -> [V] {
         return Meta.getRelationshipForModel(self.dynamicType, hash: self.localID, relationship: column)
     }
     
-    func getInBackground<V: SQLiteModel>(column: Relationship<V>, completion: (V) -> Void) {
+    final func getInBackground<V: SQLiteModel>(column: Relationship<V>, completion: (V) -> Void) {
         SyncManager.async(self.dynamicType) {
             let value = self.get(column)
             SyncManager.main({
@@ -419,7 +458,7 @@ public extension SQLiteModel {
         }
     }
     
-    func getInBackground<V: SQLiteModel>(column: Relationship<V?>, completion: (V?) -> Void) {
+    final func getInBackground<V: SQLiteModel>(column: Relationship<V?>, completion: (V?) -> Void) {
         SyncManager.async(self.dynamicType) {
             let value = self.get(column)
             SyncManager.main({
@@ -428,7 +467,7 @@ public extension SQLiteModel {
         }
     }
     
-    func getInBackground<V: SQLiteModel>(column: Relationship<[V]>, completion: ([V]) -> Void) {
+    final func getInBackground<V: SQLiteModel>(column: Relationship<[V]>, completion: ([V]) -> Void) {
         SyncManager.async(self.dynamicType) {
             let value = self.get(column)
             SyncManager.main({
@@ -447,19 +486,19 @@ public extension SQLiteModel {
         Meta.setValueForModel(self.dynamicType, hash: self.localID, column: column, value: value)
     }
     
-    func set<V: SQLiteModel>(column: Relationship<V>, value: V) {
+    final func set<V: SQLiteModel>(column: Relationship<V>, value: V) {
         self.set(Relationship<V?>(column), value: value)
     }
     
-    func set<V: SQLiteModel>(column: Relationship<V?>, value: V?) {
+    final func set<V: SQLiteModel>(column: Relationship<V?>, value: V?) {
         Meta.setRelationshipForModel(self.dynamicType, relationship: column, value: (self, value))
     }
     
-    func set<V: SQLiteModel>(column: Relationship<[V]>, value: [V]) {
+    final func set<V: SQLiteModel>(column: Relationship<[V]>, value: [V]) {
         Meta.setRelationshipForModel(self.dynamicType, relationship: column, value: (self, value))
     }
     
-    func setInBackground<V: SQLiteModel>(column: Relationship<V>, value: V, completion: (Void -> Void)? = nil) {
+    final func setInBackground<V: SQLiteModel>(column: Relationship<V>, value: V, completion: (Void -> Void)? = nil) {
         SyncManager.async(self.dynamicType) {
             self.set(column, value: value)
             if let completion = completion {
@@ -468,7 +507,7 @@ public extension SQLiteModel {
         }
     }
     
-    func setInBackground<V: SQLiteModel>(column: Relationship<V?>, value: V?, completion: (Void -> Void)? = nil) {
+    final func setInBackground<V: SQLiteModel>(column: Relationship<V?>, value: V?, completion: (Void -> Void)? = nil) {
         SyncManager.async(self.dynamicType) {
             self.set(column, value: value)
             if let completion = completion {
@@ -477,12 +516,39 @@ public extension SQLiteModel {
         }
     }
     
-    func setInBackground<V: SQLiteModel>(column: Relationship<[V]>, value: [V], completion: (Void -> Void)? = nil) {
+    final func setInBackground<V: SQLiteModel>(column: Relationship<[V]>, value: [V], completion: (Void -> Void)? = nil) {
         SyncManager.async(self.dynamicType) {
             self.set(column, value: value)
             if let completion = completion {
                 SyncManager.main(completion)
             }
         }
+    }
+    
+    // MARK: SQLiteScalarQueryable
+    
+    static func count() throws -> Int {
+        return try self.connectForScalarQuery({ connection in
+            return connection.scalar(self.table.count)
+        })!
+    }
+    
+    static func countInBackground(completion: (Int, SQLiteModelError?) -> Void) {
+        SyncManager.async(self, execute: {
+            let count = try self.count()
+            SyncManager.main({
+                completion(count, nil)
+            })
+        }, onError: {
+            SyncManager.main({
+                completion(0, SQLiteModelError.ScalarQueryError)
+            })
+        })
+    }
+    
+    // MARK: SQLiteAtomic
+    
+    static func transaction(execute: Void -> Void) {
+        SyncManager.lock(self, block: execute)
     }
 }
