@@ -1,0 +1,6 @@
+framework module Pods_tvOS_SQLiteModel {
+  umbrella header "Pods-tvOS+SQLiteModel-umbrella.h"
+
+  export *
+  module * { export * }
+}
